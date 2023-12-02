@@ -1,0 +1,1 @@
+python3 scripts/predict_for_dir.py CDTNet ./HAdobe5k_2048.pth --image /data3/chenjh/yxj_eval_task/CDTNet-High-Resolution-Image-Harmonization/predict_images/1.png --mask /data3/chenjh/yxj_eval_task/CDTNet-High-Resolution-Image-Harmonization/predict_masks/1.png --gpu 0 --hr_h 2048 --hr_w 2048 --lr 512 --results-path ./CDTNet_2048_generate

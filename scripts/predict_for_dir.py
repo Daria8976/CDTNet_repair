@@ -38,38 +38,41 @@ def main():
     net.is_sim = args.is_sim
     predictor = Predictor(net, device)
 
-    image_names = os.listdir(args.images)
+    process_single_image(args.image, args.mask, predictor, cfg, args)
 
-    def _save_image(image_name, bgr_image):
-        rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_RGB2BGR)
-        print(image_name)
-        cv2.imwrite(
-            str(cfg.RESULTS_PATH / f'{image_name}'),
-            rgb_image,
-            [cv2.IMWRITE_JPEG_QUALITY, 100]
-        )
+def process_single_image(image_path, mask_path, predictor, cfg, args):
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_size = image.shape
+    image = cv2.resize(image, (args.hr_h, args.hr_w), cv2.INTER_LINEAR)
 
-    logger.info(f'Save images to {cfg.RESULTS_PATH}')
+    mask_image = cv2.imread(mask_path).astype(np.float32) / 255
+    mask_image = cv2.resize(mask_image, (args.hr_h, args.hr_w), cv2.INTER_LINEAR)
+    mask = mask_image[:, :, 0]
 
-    for image_name in tqdm(image_names):
-        image_path = osp.join(args.images, image_name)
-        image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image_size = image.shape
-        image = cv2.resize(image, (args.hr_h, args.hr_w), cv2.INTER_LINEAR)
+    pred = predictor.predict(image, mask, return_numpy=False)
+    pred = pred.detach().cpu().numpy().astype(np.uint8)
+    pred = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
 
-        mask_path = osp.join(args.masks, '_'.join(image_name.split('.')[:-1])[0:-2] + '.png')
-        mask_image = cv2.imread(mask_path).astype(np.float32) / 255
-        mask_image = cv2.resize(mask_image, (args.hr_h, args.hr_w), cv2.INTER_LINEAR)
-        mask = mask_image[:, :, 0]
-        pred = predictor.predict(image, mask, return_numpy=False)
-        print(np.sum(image),np.sum(mask),float(torch.sum(pred)))
-        pred = pred.detach().cpu().numpy().astype(np.uint8)
-        pred = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+    if args.original_size:
+        pred = cv2.resize(pred, image_size[:-1][::-1])
 
-        if args.original_size:
-            pred = cv2.resize(pred, image_size[:-1][::-1])
-        _save_image(image_name, pred)
+    image_name = os.path.basename(image_path)
+    _save_image(image_name, pred, cfg.RESULTS_PATH)
+
+def _save_image(image_name, bgr_image, results_path):
+    # 确保保存路径存在
+    if not os.path.exists(results_path):
+        os.makedirs(results_path)
+    
+    # 构建完整的文件保存路径
+    save_path = os.path.join(results_path, image_name)
+
+    # 将图像保存到指定路径
+    cv2.imwrite(save_path, bgr_image, [cv2.IMWRITE_JPEG_QUALITY, 100])
+
+    # 打印消息确认图像已保存
+    print(f"Image saved as {save_path}")
 
 
 def parse_args():
@@ -79,14 +82,10 @@ def parse_args():
                         help='The path to the checkpoint. '
                              'This can be a relative path (relative to cfg.MODELS_PATH) '
                              'or an absolute path. The file extension can be omitted.')
-    parser.add_argument(
-        '--images', type=str,
-        help='Path to directory with .jpg images to get predictions for.'
-    )
-    parser.add_argument(
-        '--masks', type=str,
-        help='Path to directory with .png binary masks for images, named exactly like images without last _postfix.'
-    )
+    
+    parser.add_argument('--image', type=str, help='Path to a single image file.')
+    parser.add_argument('--mask', type=str, help='Path to a single mask file.')
+
     parser.add_argument('--lr', type=int, default=256, help='base resolution')
     parser.add_argument('--hr_h', type=int, default=1024, help='target h resolution')
     parser.add_argument('--hr_w', type=int, default=1024, help='target w resolution')
@@ -115,6 +114,52 @@ def parse_args():
     logger.info(cfg)
     return args, cfg
 
+# 封装成函数
+
+def process_single_image(model_type, checkpoint, image_path, mask_path, results_path, hr_h=2048, hr_w=2048, lr=512, gpu=0, is_sim=False, original_size=False):
+    os.chdir('/data3/chenjh/yxj_eval_task/CDTNet-single')
+    device = torch.device(f'cuda:{gpu}')
+    # 构建模型检查点的完整路径
+    checkpoint_path = os.path.join('./CDTNet-single', checkpoint)
+
+    # 加载模型
+    net = load_model(model_type, checkpoint_path, verbose=True)
+    net.set_resolution(hr_h, hr_w, lr, False)
+    net.is_sim = is_sim
+    predictor = Predictor(net, device)
+
+
+    # 处理单张图像和掩码
+    # 读取图像和掩码
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_size = image.shape
+    image = cv2.resize(image, (hr_h, hr_w), cv2.INTER_LINEAR)
+
+    mask_image = cv2.imread(mask_path).astype(np.float32) / 255
+    mask_image = cv2.resize(mask_image, (hr_h, hr_w), cv2.INTER_LINEAR)
+    mask = mask_image[:, :, 0]
+
+    # 使用模型进行预测
+    pred = predictor.predict(image, mask, return_numpy=False)
+    pred = pred.detach().cpu().numpy().astype(np.uint8)
+    pred = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+
+    # 调整大小
+    if original_size:
+        pred = cv2.resize(pred, image_size[:-1][::-1])
+
+    # 保存图像
+    image_name = os.path.basename(image_path)
+    results_path = Path(results_path)
+    if not results_path.exists():
+        results_path.mkdir(parents=True, exist_ok=True)
+
+    save_path = results_path / image_name
+    cv2.imwrite(str(save_path), pred, [cv2.IMWRITE_JPEG_QUALITY, 100])
+    print(f"Image saved as {save_path}")
+
+    os.chdir('/data3/chenjh/yxj_eval_task')
 
 if __name__ == '__main__':
     main()
